@@ -2,9 +2,21 @@
 
 require 'rubygems'
 require 'json'
+require 'Getopt/Declare'
 require 'parse_tree'
 require 'parse_tree_extensions'
 require 'ruby2ruby'
+
+args_spec = %q(
+    -o <output_dir>    Output directory
+    -c <cookbook>      Chef Cookbook directory (e.g. contains /recipes, /attributes...)
+)
+
+args = Getopt::Declare.new(args_spec)
+
+args.usage && exit if !(args.size == 2)
+
+$output = StringIO.new
 
 # map Chef resources to Puppet
 def resource_translate resource
@@ -109,6 +121,14 @@ class ChefResource
     handle_resource id.id2name, *args, &block
   end
 
+  def print *args
+    $output.print *args
+  end
+
+  def puts *args
+    $output.puts *args
+  end
+
 end
 
 # Responsible for the blocks passed to the top level Chef resources
@@ -202,6 +222,14 @@ class ChefInnerBlock
     ChefInnerBlock.new.instance_eval &block if block_given?
     self
   end
+
+  def print *args
+    $output.print *args
+  end
+
+  def puts *args
+    $output.puts *args
+  end
 end
 
 class ChefNode
@@ -226,32 +254,54 @@ end
 
 block_buffer = []
 class_opened = false
-recipe_name = File.open("#{ARGV[0]}/metadata.json") { |f| JSON.parse(f.read) }['name']
+cookbook_name = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
 
-File.open(File.join(ARGV[0], 'recipes', ARGV[1])) do |f|
-  f.each_line do |line|
-    # Blank lines
-    next if line =~ /^\s*$/
+recipes_path = File.join(args['-c'], 'recipes')
+output_path = "#{args['-o']}/#{cookbook_name}"
+# Build the Puppet module output directory structure
+[
+    "/files",
+    "/manifests",
+    "/lib",
+    "/lib/puppet",
+    "/lib/puppet/parser",
+    "/lib/puppet/provider",
+    "/lib/puppet/type",
+    "/lib/facter",
+    "/templates"
+].each { |d| FileUtils.mkdir_p("#{ File.join(output_path, d) }") }
 
-    # Comments
-    if line =~ /^#/
-      if class_opened
-        puts "  #{line}"
-      else
-        puts line
+Dir[File.join(recipes_path, '*')].each do |fname|
+  short_filename = fname.sub(/#{recipes_path}\//, '')
+  class_opened = false
+  File.open(fname) do |f|
+    f.each_line do |line|
+      # Blank lines
+      next if line =~ /^\s*$/
+  
+      # Comments
+      if line =~ /^#/
+        if class_opened
+          $output.puts "  #{line}"
+        else
+          $output.puts line
+        end
+        next
       end
-      next
-    end
-
-    block_buffer << line
-
-    if line =~ /^end/
-      puts "class #{recipe_name} {" unless class_opened
-      class_opened = true
-      puppeteer = ChefResource.new
-      puppeteer.instance_eval block_buffer.join("\n")
-      block_buffer = []
+  
+      block_buffer << line
+  
+      if line =~ /^end/
+        $output.puts "class #{short_filename.sub(/\.rb$/, '')} {" unless class_opened
+        class_opened = true
+        puppeteer = ChefResource.new
+        puppeteer.instance_eval block_buffer.join("\n")
+        block_buffer = []
+      end
     end
   end
+  $output.puts "}" if class_opened
+  outfile_name = File.join(output_path, "manifests", short_filename)
+  outfile_name.sub! /\.rb/, '.pp'
+  File.open(outfile_name, 'w') { |f| f.write($output.string) }
 end
-puts "}"
