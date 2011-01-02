@@ -54,7 +54,7 @@ end
 def default_action resource
   @default_action_map ||= {
         "package" => "install",
-		"gem_package" => "install"
+        "gem_package" => "install"
   }
   return action_translate(@default_action_map[resource.to_s]) if @default_action_map[resource.to_s]
 end
@@ -68,41 +68,41 @@ class ChefResource
   
   def handle_inner_block &block
     inside_block = ChefInnerBlock.new
-	inside_block.current_chef_resource = @current_chef_resource
-	inside_block.instance_eval &block if block_given?
+    inside_block.current_chef_resource = @current_chef_resource
+    inside_block.instance_eval &block if block_given?
 
     if inside_block.statements.select { |s| s =~ /^ensure/ }.empty? && default_action(@current_chef_resource)
-	  inside_block.statements << "ensure => '#{default_action(@current_chef_resource)}'"
-	end
+      inside_block.statements << "ensure => '#{default_action(@current_chef_resource)}'"
+    end
 
-	print "    " + inside_block.statements.join(",\n    ")
+    print "    " + inside_block.statements.join(",\n    ")
 
     puts ";\n  }\n\n"
-	self
+    self
   end
 
   def handle_resource chef_name, *args, &block
     @current_chef_resource = chef_name
-	if args
+    if args
       puts "  #{resource_translate(chef_name)} { '#{args[0]}':"
-	end
+    end
 
-	handle_inner_block &block
+    handle_inner_block &block
   end
 
   def execute arg, &block
     # exec takes the command as the namevar unlike Chef
     @current_chef_resource = 'execute'
-	block_source = block.to_ruby
+    block_source = block.to_ruby
     block_source =~ /command\s*(.+)/
-	block_source = $1.gsub(/(^[(]*)|([)]*$)/, '')
+    block_source = $1.gsub(/(^[(]*)|([)]*$)/, '')
     print "  # #{arg.gsub(/[-_]/, ' ')}\n  exec { '"
-	# Some strings are interpolated with values from node[][] and this handles that
-	# You get this for free from things evaluated inside ChefInnerBlock
-	print ChefInnerBlock.new.instance_eval(block_source)
-	puts "':"
+    # Some strings are interpolated with values from node[][] and this handles that
+    # You get this for free from things evaluated inside ChefInnerBlock
+    print ChefInnerBlock.new.instance_eval(block_source)
+    puts "':"
 
-	handle_inner_block &block
+    handle_inner_block &block
   end
 
   def method_missing id, *args, &block
@@ -118,7 +118,7 @@ class ChefInnerBlock
 
   def initialize
     @statements = []
-	@current_chef_resource = ''
+    @current_chef_resource = ''
   end
 
   def node *args
@@ -128,7 +128,7 @@ class ChefInnerBlock
   # Exec -------
   def command *args
     # eat it... handled by the call to the resource itself
-	self
+    self
   end
   # ------------
 
@@ -145,14 +145,14 @@ class ChefInnerBlock
 
   def resources args
     @statements << args.map { |k,v| "subscribe => #{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
-	self
+    self
   end
   # ------------
   
   # Link -------
   def to arg
     @statements << "ensure => '#{arg}'"
-	self
+    self
   end
   # ------------
 
@@ -160,10 +160,10 @@ class ChefInnerBlock
   def source arg
     if @current_chef_resource == 'template'
       @statements << "content => template('#{arg}')"
-	elsif [ 'remote_file', 'file' ].include? @current_chef_resource
+    elsif [ 'remote_file', 'file' ].include? @current_chef_resource
       @statements << "source => 'puppet:///#{arg}"
-	end
-	self
+    end
+    self
   end
 
   def backup arg
@@ -190,17 +190,17 @@ class ChefInnerBlock
 
   def method_missing id, *args, &block
     if args
-	  if args.join(' ') =~ /^[0-9]+$/
+      if args.join(' ') =~ /^[0-9]+$/
         @statements << "#{id.id2name} => #{args.join(' ')}"
-	  else
+      else
         @statements << "#{id.id2name} => '#{args.join(' ')}'"
-	  end
-	else
-	  @statements << id.id2name
-	end
+      end
+    else
+      @statements << id.id2name
+    end
     
-	ChefInnerBlock.new.instance_eval &block if block_given?
-	self
+    ChefInnerBlock.new.instance_eval &block if block_given?
+    self
   end
 end
 
@@ -212,11 +212,11 @@ class ChefNode
   def method_missing id, *args, &block
     if id.id2name == '[]'
       @calls << "#{args.join}"
-	else
+    else
       @calls << "#{id.id2name} #{args.join}"
-	end
+    end
 
-	self
+    self
   end
 
   def to_s 
@@ -231,27 +231,27 @@ recipe_name = File.open("#{ARGV[0]}/metadata.json") { |f| JSON.parse(f.read) }['
 File.open(File.join(ARGV[0], 'recipes', ARGV[1])) do |f|
   f.each_line do |line|
     # Blank lines
-	next if line =~ /^\s*$/
+    next if line =~ /^\s*$/
 
     # Comments
     if line =~ /^#/
       if class_opened
         puts "  #{line}"
       else
-	    puts line
+        puts line
       end
-	  next
-	end
+      next
+    end
 
-	block_buffer << line
+    block_buffer << line
 
-	if line =~ /^end/
+    if line =~ /^end/
       puts "class #{recipe_name} {" unless class_opened
       class_opened = true
       puppeteer = ChefResource.new
-	  puppeteer.instance_eval block_buffer.join("\n")
-	  block_buffer = []
-	end
+      puppeteer.instance_eval block_buffer.join("\n")
+      block_buffer = []
+    end
   end
 end
 puts "}"
