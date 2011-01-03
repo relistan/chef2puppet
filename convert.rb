@@ -16,8 +16,6 @@ args = Getopt::Declare.new(args_spec)
 
 args.usage && exit if !(args.size == 2)
 
-$output = StringIO.new
-
 # map Chef resources to Puppet
 def resource_translate resource
   @resource_map ||= {
@@ -72,25 +70,50 @@ def default_action resource
   nil
 end
 
+class ParsingContext
+  attr_accessor :output, 
+      :current_chef_resource, 
+	  :class_name, 
+	  :cookbook_name, 
+	  :recipes_path, 
+	  :output_path,
+	  :fname,
+	  :short_fname
+
+  def initialize output, cookbook_name, recipes_path, output_path
+    @output = output
+	@current_chef_resource = current_chef_resource 
+	@class_name = class_name
+	@cookbook_name = cookbook_name
+	@recipes_path = recipes_path
+	@output_path = output_path
+  end
+
+  def puts *args
+    @output.puts *args
+  end
+
+  def print *args
+    @output.print *args
+  end
+
+  def contents
+    @output.string
+  end
+end
+
 # Responsible for the top level Chef DSL resources
 class ChefResource
 
-  def initialize
-    @current_chef_resource = ''
+  def initialize context
+    @context = context
   end
   
   def handle_inner_block &block
-    inside_block = ChefInnerBlock.new
-    inside_block.current_chef_resource = @current_chef_resource
+    inside_block = ChefInnerBlock.new @context
     inside_block.instance_eval &block if block_given?
 
-    if inside_block.statements.select do |s| 
-	    s =~ /^ensure => '#{default_action(@current_chef_resource)}'/ 
-	end.empty? && default_action(@current_chef_resource)
-      inside_block.statements << "ensure => '#{default_action(@current_chef_resource)}'"
-    end
-
-    print "    " + inside_block.statements.join(",\n    ")
+    print "    " + inside_block.result.join(",\n    ")
 
     puts ";\n  }\n\n"
     self
@@ -114,7 +137,7 @@ class ChefResource
     print "  # #{arg.gsub(/[-_]/, ' ')}\n  exec { '"
     # Some strings are interpolated with values from node[][] and this handles that
     # You get this for free from things evaluated inside ChefInnerBlock
-    print ChefInnerBlock.new.instance_eval(block_source)
+    print ChefInnerBlock.new(@context).instance_eval(block_source)
     puts "':"
 
     handle_inner_block &block
@@ -125,11 +148,11 @@ class ChefResource
   end
 
   def print *args
-    $output.print *args
+    @context.print *args
   end
 
   def puts *args
-    $output.puts *args
+    @context.puts *args
   end
 
 end
@@ -137,11 +160,9 @@ end
 # Responsible for the blocks passed to the top level Chef resources
 class ChefInnerBlock
 
-  attr_accessor :statements, :current_chef_resource
-
-  def initialize
-    @statements = []
-    @current_chef_resource = ''
+  def initialize context
+    @context = context
+	@statements = []
   end
 
   def node *args
@@ -186,10 +207,10 @@ class ChefInnerBlock
 
   # Template ----
   def source arg
-    if @current_chef_resource == 'template'
+    if @context.current_chef_resource == 'template'
       @statements << "content => template('#{arg}')"
-    elsif [ 'remote_file', 'file' ].include? @current_chef_resource
-      @statements << "source => 'puppet:///#{arg}"
+    elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
+      @statements << "source => 'puppet://server/modules/#{@context.class_name}/#{arg}"
     end
     self
   end
@@ -203,7 +224,7 @@ class ChefInnerBlock
   def action arg, &block
     # Wouldn't it be nice if to_a wasn't deprecated for this case?
     arg = [ arg ] unless arg.is_a? Array
-    @statements << arg.map { |action| "ensure => '#{action_translate(action)}'" }
+    @statements += arg.map { |action| "ensure => '#{action_translate(action)}'" }
   end
 
   def not_if *args, &block
@@ -229,17 +250,29 @@ class ChefInnerBlock
       @statements << id.id2name
     end
     
-    ChefInnerBlock.new.instance_eval &block if block_given?
+	# Handle at least two deep
+    ChefInnerBlock.new(@context).instance_eval &block if block_given?
     self
   end
 
   def print *args
-    $output.print *args
+    @context.print *args
   end
 
   def puts *args
-    $output.puts *args
+    @context.puts *args
   end
+
+  # Called when the eval is complete.  Returns completed results
+  def result
+    if @statements.select do |s| 
+	      s =~ /^ensure => '#{default_action(@current_chef_resource)}'/ 
+	  end.empty? && default_action(@current_chef_resource)
+      @statements << "ensure => '#{default_action(@current_chef_resource)}'"
+    end
+	@statements.uniq
+  end
+
 end
 
 class ChefNode
@@ -262,21 +295,21 @@ class ChefNode
   end
 end
 
-
-def process_recipes recipes_path, output_path
-  Dir[File.join(recipes_path, '*')].each do |fname|
-    short_fname = fname.sub(/#{recipes_path}\//, '')
-    class_name = short_fname.sub(/\.rb$/, '')
-    process_one_recipe fname, short_fname, class_name, output_path
+def process_recipes context
+  Dir[File.join(context.recipes_path, '*')].each do |fname|
+    context.fname = fname
+    context.short_fname = fname.sub(/#{context.recipes_path}\//, '')
+    context.class_name = context.short_fname.sub(/\.rb$/, '')
+    process_one_recipe context
   end
 end
 
-def process_one_recipe fname, short_fname, class_name, output_path
+def process_one_recipe context
   class_opened = false
   block_buffer = []
 
-  puts "Working on recipe... #{fname}"
-  File.open(fname) do |f|
+  puts "Working on recipe... #{context.fname}"
+  File.open(context.fname) do |f|
     f.each_line do |line|
       # Blank lines
       next if line =~ /^\s*$/
@@ -284,9 +317,9 @@ def process_one_recipe fname, short_fname, class_name, output_path
       # Comments
       if line =~ /^#/
         if class_opened
-          $output.puts "  #{line}"
+          context.puts "  #{line}"
         else
-          $output.puts line
+          context.puts line
         end
 
         next
@@ -295,20 +328,20 @@ def process_one_recipe fname, short_fname, class_name, output_path
       block_buffer << line
   
       if line =~ /^end/
-        $output.puts "class #{class_name} {" unless class_opened
+        context.puts "class #{context.class_name} {" unless class_opened
         class_opened = true
-        puppeteer = ChefResource.new
+        puppeteer = ChefResource.new context
         puppeteer.instance_eval block_buffer.join
         block_buffer = []
       end
     end
   end
 
-  $output.puts "}" if class_opened
-  outfile_name = File.join(output_path, "manifests", short_fname)
+  context.puts "}" if class_opened
+  outfile_name = File.join(context.output_path, "manifests", context.short_fname)
   outfile_name.sub! /\.rb/, '.pp'
-  File.open(outfile_name, 'w') { |f| f.write($output.string) }
-  $output = StringIO.new
+  File.open(outfile_name, 'w') { |f| f.write(context.contents) }
+  context.output.string = ''
 end
 
 # MAIN -------------------
@@ -324,6 +357,8 @@ puts "Recipes Path:    #{recipes_path}"
 puts "Templates Path:  #{templates_path}"
 puts "Output Path:     #{output_path}"
 
+context = ParsingContext.new(StringIO.new, cookbook_name, recipes_path, output_path)
+
 # Build the Puppet module output directory structure
 [
     "/files",
@@ -337,4 +372,4 @@ puts "Output Path:     #{output_path}"
     "/templates"
 ].each { |dir| FileUtils.mkdir_p("#{ File.join(output_path, dir) }") }
 
-process_recipes recipes_path, output_path
+process_recipes context
