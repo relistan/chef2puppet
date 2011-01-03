@@ -173,6 +173,7 @@ class ChefInnerBlock
 
   def running *args
     @statements << "ensure => running"
+	self
   end
   # ------------
   
@@ -261,38 +262,20 @@ class ChefNode
   end
 end
 
-# Detect/create configuration info
-cookbook_name = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
-recipes_path = File.join(args['-c'], 'recipes')
-output_path = "#{args['-o']}/#{cookbook_name}"
 
-puts "Cookbook Name: #{cookbook_name}"
-puts "Recipes Path:  #{recipes_path}"
-puts "Output Path:   #{output_path}"
+def process_recipes recipes_path, output_path
+  Dir[File.join(recipes_path, '*')].each do |fname|
+    short_fname = fname.sub(/#{recipes_path}\//, '')
+    class_name = short_fname.sub(/\.rb$/, '')
+    process_one_recipe fname, short_fname, class_name, output_path
+  end
+end
 
-# Build the Puppet module output directory structure
-[
-    "/files",
-    "/manifests",
-    "/lib",
-    "/lib/puppet",
-    "/lib/puppet/parser",
-    "/lib/puppet/provider",
-    "/lib/puppet/type",
-    "/lib/facter",
-    "/templates"
-].each { |d| FileUtils.mkdir_p("#{ File.join(output_path, d) }") }
-
-block_buffer = []
-class_opened = false
-
-Dir[File.join(recipes_path, '*')].each do |fname|
-
-  short_filename = fname.sub(/#{recipes_path}\//, '')
-  classname = short_filename.sub(/\.rb$/, '')
+def process_one_recipe fname, short_fname, class_name, output_path
   class_opened = false
+  block_buffer = []
 
-  puts "Working on... #{fname}"
+  puts "Working on recipe... #{fname}"
   File.open(fname) do |f|
     f.each_line do |line|
       # Blank lines
@@ -312,7 +295,7 @@ Dir[File.join(recipes_path, '*')].each do |fname|
       block_buffer << line
   
       if line =~ /^end/
-        $output.puts "class #{classname} {" unless class_opened
+        $output.puts "class #{class_name} {" unless class_opened
         class_opened = true
         puppeteer = ChefResource.new
         puppeteer.instance_eval block_buffer.join
@@ -322,9 +305,36 @@ Dir[File.join(recipes_path, '*')].each do |fname|
   end
 
   $output.puts "}" if class_opened
-  outfile_name = File.join(output_path, "manifests", short_filename)
+  outfile_name = File.join(output_path, "manifests", short_fname)
   outfile_name.sub! /\.rb/, '.pp'
   File.open(outfile_name, 'w') { |f| f.write($output.string) }
   $output = StringIO.new
-
 end
+
+# MAIN -------------------
+
+# Detect/create configuration info
+cookbook_name = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
+recipes_path = File.join(args['-c'], 'recipes')
+templates_path = File.join(args['-c'], 'templates')
+output_path = "#{args['-o']}/#{cookbook_name}"
+
+puts "Cookbook Name:   #{cookbook_name}"
+puts "Recipes Path:    #{recipes_path}"
+puts "Templates Path:  #{templates_path}"
+puts "Output Path:     #{output_path}"
+
+# Build the Puppet module output directory structure
+[
+    "/files",
+    "/manifests",
+    "/lib",
+    "/lib/puppet",
+    "/lib/puppet/parser",
+    "/lib/puppet/provider",
+    "/lib/puppet/type",
+    "/lib/facter",
+    "/templates"
+].each { |dir| FileUtils.mkdir_p("#{ File.join(output_path, dir) }") }
+
+process_recipes recipes_path, output_path
