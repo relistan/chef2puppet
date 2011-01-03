@@ -69,6 +69,7 @@ def default_action resource
         "gem_package" => "install"
   }
   return action_translate(@default_action_map[resource.to_s]) if @default_action_map[resource.to_s]
+  nil
 end
 
 # Responsible for the top level Chef DSL resources
@@ -83,7 +84,9 @@ class ChefResource
     inside_block.current_chef_resource = @current_chef_resource
     inside_block.instance_eval &block if block_given?
 
-    if inside_block.statements.select { |s| s =~ /^ensure/ }.empty? && default_action(@current_chef_resource)
+    if inside_block.statements.select do |s| 
+	    s =~ /^ensure => '#{default_action(@current_chef_resource)}'/ 
+	end.empty? && default_action(@current_chef_resource)
       inside_block.statements << "ensure => '#{default_action(@current_chef_resource)}'"
     end
 
@@ -167,6 +170,10 @@ class ChefInnerBlock
     @statements << args.map { |k,v| "subscribe => #{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
     self
   end
+
+  def running *args
+    @statements << "ensure => running"
+  end
   # ------------
   
   # Link -------
@@ -193,7 +200,9 @@ class ChefInnerBlock
   # ------------
 
   def action arg, &block
-    @statements << arg.to_a.map { |action| "ensure => '#{action_translate(action)}'" }
+    # Wouldn't it be nice if to_a wasn't deprecated for this case?
+    arg = [ arg ] unless arg.is_a? Array
+    @statements << arg.map { |action| "ensure => '#{action_translate(action)}'" }
   end
 
   def not_if *args, &block
@@ -252,12 +261,15 @@ class ChefNode
   end
 end
 
-block_buffer = []
-class_opened = false
+# Detect/create configuration info
 cookbook_name = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
-
 recipes_path = File.join(args['-c'], 'recipes')
 output_path = "#{args['-o']}/#{cookbook_name}"
+
+puts "Cookbook Name: #{cookbook_name}"
+puts "Recipes Path:  #{recipes_path}"
+puts "Output Path:   #{output_path}"
+
 # Build the Puppet module output directory structure
 [
     "/files",
@@ -271,9 +283,16 @@ output_path = "#{args['-o']}/#{cookbook_name}"
     "/templates"
 ].each { |d| FileUtils.mkdir_p("#{ File.join(output_path, d) }") }
 
+block_buffer = []
+class_opened = false
+
 Dir[File.join(recipes_path, '*')].each do |fname|
+
   short_filename = fname.sub(/#{recipes_path}\//, '')
+  classname = short_filename.sub(/\.rb$/, '')
   class_opened = false
+
+  puts "Working on... #{fname}"
   File.open(fname) do |f|
     f.each_line do |line|
       # Blank lines
@@ -286,22 +305,26 @@ Dir[File.join(recipes_path, '*')].each do |fname|
         else
           $output.puts line
         end
+
         next
       end
   
       block_buffer << line
   
       if line =~ /^end/
-        $output.puts "class #{short_filename.sub(/\.rb$/, '')} {" unless class_opened
+        $output.puts "class #{classname} {" unless class_opened
         class_opened = true
         puppeteer = ChefResource.new
-        puppeteer.instance_eval block_buffer.join("\n")
+        puppeteer.instance_eval block_buffer.join
         block_buffer = []
       end
     end
   end
+
   $output.puts "}" if class_opened
   outfile_name = File.join(output_path, "manifests", short_filename)
   outfile_name.sub! /\.rb/, '.pp'
   File.open(outfile_name, 'w') { |f| f.write($output.string) }
+  $output = StringIO.new
+
 end
