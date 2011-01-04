@@ -1,5 +1,10 @@
 #!/usr/bin/env ruby
 
+# Chef2Puppet - Convert Chef cookbooks to Puppet manifests with minimized human
+# intervention required.
+
+# Tue Jan  4 11:55:05 PST 2011
+
 require 'rubygems'
 require 'json'
 require 'Getopt/Declare'
@@ -303,6 +308,10 @@ class ChefNode
   def to_s 
     "${#{@calls.join('_')}}"
   end
+
+  def to_s_bare
+    @calls.join('_')
+  end
 end
 
 def process_recipes context
@@ -369,13 +378,26 @@ end
 def process_templates context
   Dir[File.join(context.templates_path, '*')].each do |fname|
     context.fname = fname
+    context.short_fname = fname.sub(/#{context.templates_path}\//, '')
     process_one_template context
   end
 end
 
 def process_one_template context
-  puts "Copying #{context.fname}..."
-  FileUtils.cp context.fname,  File.join(context.output_path, "templates")
+  puts "Modifying template #{context.fname}..."
+  File.open(context.fname) do |f| 
+    # Attempt to reduce node[][]... to the same format used in the recipes
+    output = f.map do |line|
+      line.gsub /\@?(node\[.*\])/ do |match|
+	    node = ChefNode.new
+		node.instance_eval $1
+		node.to_s_bare
+	  end
+	end
+
+	File.open(File.join(context.output_path, "templates", context.short_fname), 'w') { |f| f.write output }
+  end
+
 end
 
 # MAIN -------------------
@@ -415,6 +437,7 @@ context = ParsingContext.new(
     "/templates"
 ].each { |dir| FileUtils.mkdir_p("#{ File.join(output_path, dir) }") }
 
+# Do the actual work
 process_recipes context
 process_files context
 process_templates context
