@@ -78,26 +78,26 @@ end
 class ParsingContext
   attr_accessor :output, 
       :current_chef_resource, 
-	  :class_name, 
-	  :cookbook_name, 
-	  :recipes_path, 
-	  :files_path,
-	  :templates_path,
-	  :output_path,
-	  :fname,
-	  :short_fname
+      :class_name, 
+      :cookbook_name, 
+      :recipes_path, 
+      :files_path,
+      :templates_path,
+      :output_path,
+      :fname,
+      :short_fname
 
   def initialize output, cookbook_name, recipes_path, files_path, templates_path, output_path
     @output = output
-	@current_chef_resource = current_chef_resource 
-	@class_name = class_name
-	@cookbook_name = cookbook_name
-	@recipes_path = recipes_path
-	@files_path = files_path
-	@templates_path = templates_path
-	@output_path = output_path
-	@fname = ''
-	@short_fname = ''
+    @current_chef_resource = current_chef_resource 
+    @class_name = class_name
+    @cookbook_name = cookbook_name
+    @recipes_path = recipes_path
+    @files_path = files_path
+    @templates_path = templates_path
+    @output_path = output_path
+    @fname = ''
+    @short_fname = ''
   end
 
   def puts *args
@@ -177,7 +177,7 @@ class ChefInnerBlock
 
   def initialize context
     @context = context
-	@statements = []
+    @statements = []
   end
 
   def node *args
@@ -209,7 +209,7 @@ class ChefInnerBlock
 
   def running *args
     @statements << "ensure => running"
-	self
+    self
   end
   # ------------
   
@@ -265,7 +265,7 @@ class ChefInnerBlock
       @statements << id.id2name
     end
     
-	# Handle at least two deep
+    # Handle at least two deep
     ChefInnerBlock.new(@context).instance_eval &block if block_given?
     self
   end
@@ -281,11 +281,11 @@ class ChefInnerBlock
   # Called when the eval is complete.  Returns completed results
   def result
     if @statements.select do |s| 
-	      s =~ /^ensure => '#{default_action(@context.current_chef_resource)}'/ 
-	  end.empty? && default_action(@context.current_chef_resource)
+          s =~ /^ensure => '#{default_action(@context.current_chef_resource)}'/ 
+      end.empty? && default_action(@context.current_chef_resource)
       @statements << "ensure => '#{default_action(@context.current_chef_resource)}'"
     end
-	@statements.uniq
+    @statements.uniq
   end
 
 end
@@ -389,13 +389,13 @@ def process_one_template context
     # Attempt to reduce node[][]... to the same format used in the recipes
     output = f.map do |line|
       line.gsub /\@?(node\[.*\])/ do |match|
-	    node = ChefNode.new
-		node.instance_eval $1
-		node.to_s_bare
-	  end
-	end
+        node = ChefNode.new
+        node.instance_eval $1
+        node.to_s_bare
+      end
+    end
 
-	File.open(File.join(context.output_path, "templates", context.short_fname), 'w') { |f| f.write output }
+    File.open(File.join(context.output_path, "templates", context.short_fname), 'w') { |f| f.write output }
   end
 
 end
