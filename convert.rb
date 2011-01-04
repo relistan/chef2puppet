@@ -100,6 +100,10 @@ class ParsingContext
   def contents
     @output.string
   end
+
+  def truncate
+    @output.string = ''
+  end
 end
 
 # Responsible for the top level Chef DSL resources
@@ -120,7 +124,7 @@ class ChefResource
   end
 
   def handle_resource chef_name, *args, &block
-    @current_chef_resource = chef_name
+    @context.current_chef_resource = chef_name
     if args
       puts "  #{resource_translate(chef_name)} { '#{args[0]}':"
     end
@@ -130,7 +134,7 @@ class ChefResource
 
   def execute arg, &block
     # exec takes the command as the namevar unlike Chef
-    @current_chef_resource = 'execute'
+    @context.current_chef_resource = 'execute'
     block_source = block.to_ruby
     block_source =~ /command\s*(.+)/
     block_source = $1.gsub(/(^[(]*)|([)]*$)/, '')
@@ -210,7 +214,7 @@ class ChefInnerBlock
     if @context.current_chef_resource == 'template'
       @statements << "content => template('#{arg}')"
     elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
-      @statements << "source => 'puppet://server/modules/#{@context.class_name}/#{arg}"
+      @statements << "source => 'puppet://server/modules/#{@context.cookbook_name}/#{arg}"
     end
     self
   end
@@ -266,9 +270,9 @@ class ChefInnerBlock
   # Called when the eval is complete.  Returns completed results
   def result
     if @statements.select do |s| 
-	      s =~ /^ensure => '#{default_action(@current_chef_resource)}'/ 
-	  end.empty? && default_action(@current_chef_resource)
-      @statements << "ensure => '#{default_action(@current_chef_resource)}'"
+	      s =~ /^ensure => '#{default_action(@context.current_chef_resource)}'/ 
+	  end.empty? && default_action(@context.current_chef_resource)
+      @statements << "ensure => '#{default_action(@context.current_chef_resource)}'"
     end
 	@statements.uniq
   end
@@ -341,7 +345,7 @@ def process_one_recipe context
   outfile_name = File.join(context.output_path, "manifests", context.short_fname)
   outfile_name.sub! /\.rb/, '.pp'
   File.open(outfile_name, 'w') { |f| f.write(context.contents) }
-  context.output.string = ''
+  context.truncate
 end
 
 # MAIN -------------------
