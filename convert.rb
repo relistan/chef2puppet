@@ -11,6 +11,7 @@ require 'Getopt/Declare'
 require 'parse_tree'
 require 'parse_tree_extensions'
 require 'ruby2ruby'
+require 'net/http' # yuck
 
 args_spec = %q(
     -o <output_dir>    Output directory (where modules are written)
@@ -225,7 +226,13 @@ class ChefInnerBlock
     if @context.current_chef_resource == 'template'
       @statements << "content => template('#{arg}')"
     elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
-      @statements << "source => 'puppet://server/modules/#{@context.cookbook_name}/#{arg}"
+      outfile = arg.split("/").last
+      if arg =~ /http/
+        # Download the remote file
+		outpath = File.join(@context.files_path, outfile)
+        http_get arg, outpath unless File.exist? outpath
+      end
+      @statements << "source => 'puppet://server/modules/#{@context.cookbook_name}/#{outfile}"
     end
     self
   end
@@ -311,6 +318,17 @@ class ChefNode
 
   def to_s_bare
     @calls.join('_')
+  end
+end
+
+def http_get url, output_path
+  uri = URI.parse url
+  $stderr.puts "Fetching #{uri.path} from #{uri.host}..."
+  Net::HTTP.start(uri.host) do |http|
+    resp = http.get(uri.path)
+    open(output_path, "wb") do |file|
+      file.write(resp.body)
+    end
   end
 end
 

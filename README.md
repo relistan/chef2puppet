@@ -23,3 +23,7 @@ Output is all into a directory structure than can be copied to the
 Puppet modules directory, including the original files and templates.
 Inside of templates, an attempt is made to substitute node attribute
 calls into Puppet-compatible ones.
+
+The converter will attempt to download remote HTTP urls into the
+correct output location in the Puppet module using Ruby's Net::HTTP
+module.
