@@ -8,7 +8,7 @@ require 'parse_tree_extensions'
 require 'ruby2ruby'
 
 args_spec = %q(
-    -o <output_dir>    Output directory
+    -o <output_dir>    Output directory (where modules are written)
     -c <cookbook>      Chef Cookbook directory (e.g. contains /recipes, /attributes...)
 )
 
@@ -76,17 +76,23 @@ class ParsingContext
 	  :class_name, 
 	  :cookbook_name, 
 	  :recipes_path, 
+	  :files_path,
+	  :templates_path,
 	  :output_path,
 	  :fname,
 	  :short_fname
 
-  def initialize output, cookbook_name, recipes_path, output_path
+  def initialize output, cookbook_name, recipes_path, files_path, templates_path, output_path
     @output = output
 	@current_chef_resource = current_chef_resource 
 	@class_name = class_name
 	@cookbook_name = cookbook_name
 	@recipes_path = recipes_path
+	@files_path = files_path
+	@templates_path = templates_path
 	@output_path = output_path
+	@fname = ''
+	@short_fname = ''
   end
 
   def puts *args
@@ -348,20 +354,53 @@ def process_one_recipe context
   context.truncate
 end
 
+def process_files context
+  Dir[File.join(context.files_path, '*')].each do |fname|
+    context.fname = fname
+    process_one_file context
+  end
+end
+
+def process_one_file context
+  puts "Copying #{context.fname}..."
+  FileUtils.cp context.fname, File.join(context.output_path, "files")
+end
+
+def process_templates context
+  Dir[File.join(context.templates_path, '*')].each do |fname|
+    context.fname = fname
+    process_one_template context
+  end
+end
+
+def process_one_template context
+  puts "Copying #{context.fname}..."
+  FileUtils.cp context.fname,  File.join(context.output_path, "templates")
+end
+
 # MAIN -------------------
 
 # Detect/create configuration info
-cookbook_name = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
-recipes_path = File.join(args['-c'], 'recipes')
-templates_path = File.join(args['-c'], 'templates')
-output_path = "#{args['-o']}/#{cookbook_name}"
+cookbook_name  = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
+recipes_path   = File.join(args['-c'], 'recipes')
+templates_path = File.join(args['-c'], 'templates', 'default') # TODO this only handles default
+files_path     = File.join(args['-c'], 'files', 'default')     # TODO this only handles default
+output_path    = "#{args['-o']}/#{cookbook_name}"
 
 puts "Cookbook Name:   #{cookbook_name}"
 puts "Recipes Path:    #{recipes_path}"
 puts "Templates Path:  #{templates_path}"
+puts "Files Path:      #{files_path}"
 puts "Output Path:     #{output_path}"
 
-context = ParsingContext.new(StringIO.new, cookbook_name, recipes_path, output_path)
+context = ParsingContext.new(
+  StringIO.new, 
+  cookbook_name,
+  recipes_path,
+  files_path,
+  templates_path,
+  output_path
+)
 
 # Build the Puppet module output directory structure
 [
@@ -377,3 +416,5 @@ context = ParsingContext.new(StringIO.new, cookbook_name, recipes_path, output_p
 ].each { |dir| FileUtils.mkdir_p("#{ File.join(output_path, dir) }") }
 
 process_recipes context
+process_files context
+process_templates context
