@@ -186,22 +186,10 @@ class ChefResource
     handle_inner_block &block
   end
 
-  def execute arg, &block
-    # exec takes the command as the namevar unlike Chef
-    @context.current_chef_resource = 'execute'
-
-    # Isolate the command element and reformat it
-    block_source = block.to_ruby
-    block_source =~ /command\s*(.+)/
-    block_source = $1.gsub(/(^[(]*)|([)]*$)/, '')
-    print "  # #{arg.gsub(/[-_]/, ' ')}\n  exec { 'echo \""
-
-    # Some strings are interpolated with values from node[][] and this handles that
-    # You get this for free from things evaluated inside ChefInnerBlock
-    print ChefInnerBlock.new(@context).instance_eval(block_source)
-    puts "\" | bash':" # Puppet is unhappy with the exit status of /bin/sh
-    puts "    path => '/bin:/usr/bin:/sbin:/usr/sbin'," # a bit hacky to do this here
-
+  def gem_package *args, &block
+    @context.current_chef_resource = 'gem_package'
+    puts "  package { '#{args[0]}':"
+    puts "    provider => 'gem',"
     handle_inner_block &block
   end
 
@@ -244,28 +232,14 @@ class ChefInnerBlock
   end
 
   # Exec -------
-  def command *args
-    # eat it... handled by the call to the resource itself
+  def command arg
+     @statements['path'] << '/bin:/usr/bin:/sbin:/usr/sbin'
+     @statements['command'] << %~" echo \\"#{arg.gsub(/"/, '\\\\\"')}\\" | bash"~ # OMG!
     self
   end
   # ------------
 
   # Service ----
-  def subscribes *args
-    # eat it... we handle this with 'resources'
-    self
-  end
-
-  def notifies *args
-    # eat it... we handle this with 'resources'
-    self
-  end
-
-  def resources args
-    args.each { |k,v| self['subscribe'] << "#{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
-    self
-  end
-
   def running *args
     self['ensure'] << "running"
     self
@@ -285,7 +259,7 @@ class ChefInnerBlock
       self['content'] << "template('#{@context.cookbook_name}/#{arg}')"
     elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
       outfile = arg.split("/").last
-      if arg =~ /http/
+      if arg =~ /^http/
         # Download the remote file
         outpath = File.join(@context.output_path, 'files', outfile)
         http_get arg, outpath unless File.exist? outpath
@@ -308,9 +282,30 @@ class ChefInnerBlock
   end
   # ------------
 
+  def subscribes *args
+    # eat it... we handle this with 'resources'
+    self
+  end
+
+  def notifies *args
+    # eat it... we handle this with 'resources'
+    self['WARNING'] << "Uses notifies()" # TODO fixing requires building a complete tree before output stage (ouch)
+    self
+  end
+
+  def resources args
+    args.each { |k,v| self['subscribe'] << "#{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
+    self
+  end
+
   def action arg, &block
-    # Wouldn't it be nice if to_a wasn't deprecated for this case?
     arg = [ arg ] unless arg.is_a? Array
+
+    if arg.include? :nothing
+      self['refreshonly'] << 'true' if @context.current_chef_resource = 'execute'
+    end
+
+    arg.reject! { |x| [ :nothing, :create ].include? x }
     arg.each { |action| self['ensure'] << "'#{action_translate(action)}'" }
   end
 
@@ -329,7 +324,7 @@ class ChefInnerBlock
   end
 
   def mode arg
-    # Handle converting Integer to octal again (since Ruby kindly ate the original notation)
+    # Convert integer to octal again
     self['mode'] << "0#{arg.to_s(8)}"
   end
 
