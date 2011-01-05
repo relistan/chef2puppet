@@ -12,6 +12,7 @@ require 'parse_tree'
 require 'parse_tree_extensions'
 require 'ruby2ruby'
 require 'net/http' # yuck
+require 'stringio'
 
 args_spec = %q(
     -o <output_dir>    Output directory (where modules are written)
@@ -229,7 +230,7 @@ class ChefInnerBlock
       outfile = arg.split("/").last
       if arg =~ /http/
         # Download the remote file
-		outpath = File.join(@context.files_path, outfile)
+        outpath = File.join(@context.output_path, 'files', outfile)
         http_get arg, outpath unless File.exist? outpath
       end
       @statements << "source => 'puppet://server/modules/#{@context.cookbook_name}/#{outfile}"
@@ -323,7 +324,7 @@ end
 
 def http_get url, output_path
   uri = URI.parse url
-  $stderr.puts "Fetching #{uri.path} from #{uri.host}..."
+  $stderr.puts "Fetching #{uri.path} from #{uri.host} to #{output_path}..."
   Net::HTTP.start(uri.host) do |http|
     resp = http.get(uri.path)
     open(output_path, "wb") do |file|
