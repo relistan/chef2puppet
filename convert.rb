@@ -79,7 +79,8 @@ end
 # map Chef actions to Puppet ensure statements
 def action_translate action
   @action_map ||= {
-       "install" => "installed" 
+       "install" => "installed",
+       "start" => "running"
   }
   return @action_map[action.to_s] if @action_map[action.to_s]
   action.to_s
@@ -160,7 +161,17 @@ class ChefResource
     inside_block = ChefInnerBlock.new @context
     inside_block.instance_eval &block if block_given?
 
-    print "    " + inside_block.result.join(",\n    ")
+    output = []
+    inside_block.result.each do |k,v|
+      v.uniq!
+      if v.size > 1
+        output << "    #{k} => [ #{v.join(", ")} ]"
+      else
+        output << "    #{k} => #{v.first}"
+      end
+    end
+
+    print output.join(",\n")
 
     puts ";\n  }\n\n"
     self
@@ -221,11 +232,15 @@ class ChefInnerBlock
 
   def initialize context
     @context = context
-    @statements = []
+    @statements = Hash.new { |hash, key| hash[key] = Array.new }
+  end
+
+  def [] key
+    @statements[key]
   end
 
   def node *args
-    return ChefNode.new
+    ChefNode.new
   end
 
   # Exec -------
@@ -247,19 +262,19 @@ class ChefInnerBlock
   end
 
   def resources args
-    @statements << args.map { |k,v| "subscribe => #{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
+    args.each { |k,v| self['subscribe'] << "#{resource_translate(k).to_s.capitalize}['#{v.to_s}']" }
     self
   end
 
   def running *args
-    @statements << "ensure => running"
+    self['ensure'] << "running"
     self
   end
   # ------------
   
   # Link -------
   def to arg
-    @statements << "ensure => '#{arg}'"
+    self['ensure'] << "'#{arg}'"
     self
   end
   # ------------
@@ -267,7 +282,7 @@ class ChefInnerBlock
   # Template ----
   def source arg
     if @context.current_chef_resource == 'template'
-      @statements << "content => template('#{@context.cookbook_name}/#{arg}')"
+      self['content'] << "template('#{@context.cookbook_name}/#{arg}')"
     elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
       outfile = arg.split("/").last
       if arg =~ /http/
@@ -275,13 +290,20 @@ class ChefInnerBlock
         outpath = File.join(@context.output_path, 'files', outfile)
         http_get arg, outpath unless File.exist? outpath
       end
-      @statements << "source => 'puppet://#{@context.server_name}/modules/#{@context.cookbook_name}/#{outfile}'"
+      self['source'] << "'puppet://#{@context.server_name}/modules/#{@context.cookbook_name}/#{outfile}'"
     end
     self
   end
 
   def backup arg
-    @statements << "backup => #{arg}"
+    self['backup'] << arg
+    self
+  end
+  # ------------
+
+  # Package ----
+  def version arg
+    self['ensure'] << "'#{arg}'"
     self
   end
   # ------------
@@ -289,30 +311,37 @@ class ChefInnerBlock
   def action arg, &block
     # Wouldn't it be nice if to_a wasn't deprecated for this case?
     arg = [ arg ] unless arg.is_a? Array
-    @statements += arg.map { |action| "ensure => '#{action_translate(action)}'" }
+    arg.each { |action| self['ensure'] << "'#{action_translate(action)}'" }
   end
 
   def not_if *args, &block
     block_source = block.to_ruby.sub(/proc \{ /, '').sub(/ \}/, '')
     block_source.gsub!(/File\.exist\?/, "").gsub!(/[\(\)]/, '')
-    @statements << "creates => #{block_source}" if block_given?
+    if block_given? && (resource_translate(@context.current_chef_resource) != 'file')
+      self['creates'] << block_source if block_given?
+    end
   end
 
   def only_if *args, &block
     block_source = block.to_ruby.sub(/proc \{ /, '').sub(/ \}/, '')
     block_source.gsub!(/File\.exist\?/, "test -f ").gsub!(/[\(\)]/, '')
-    @statements << "onlyif => '#{block_source}'" if block_given?
+    self['onlyif'] << block_source if block_given?
+  end
+
+  def mode arg
+    # Handle converting Integer to octal again (since Ruby kindly ate the original notation)
+    self['mode'] << "0#{arg.to_s(8)}"
   end
 
   def method_missing id, *args, &block
     if args
-      if args.join(' ') =~ /^[0-9]+$/
-        @statements << "#{id.id2name} => #{args.join(' ')}"
+      if args.join =~ /^[0-9]+$/
+        self[id.id2name] << args.first
       else
-        @statements << "#{id.id2name} => '#{args.join(' ')}'"
+        self[id.id2name] << "'#{args.join(' ')}'"
       end
     else
-      @statements << id.id2name
+      self[id.id2name] << ''
     end
     
     # Handle at least two deep
@@ -330,12 +359,10 @@ class ChefInnerBlock
 
   # Called when the eval is complete.  Returns completed results
   def result
-    if @statements.select do |s| 
-          s =~ /^ensure => '#{default_action(@context.current_chef_resource)}'/ 
-      end.empty? && default_action(@context.current_chef_resource)
-      @statements << "ensure => '#{default_action(@context.current_chef_resource)}'"
+    if default_action(@context.current_chef_resource) && !self['ensure'].include?("'#{default_action(@context.current_chef_resource)}'")
+      self['ensure'] << "'#{default_action(@context.current_chef_resource)}'"
     end
-    @statements.uniq
+    @statements
   end
 
 end
