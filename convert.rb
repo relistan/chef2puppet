@@ -7,21 +7,38 @@
 
 require 'rubygems'
 require 'json'
-require 'Getopt/Declare'
 require 'parse_tree'
 require 'parse_tree_extensions'
 require 'ruby2ruby'
 require 'net/http' # yuck
 require 'stringio'
+require 'optparse'
 
-args_spec = %q(
-    -o <output_dir>    Output directory (where modules are written)
-    -c <cookbook>      Chef Cookbook directory (e.g. contains /recipes, /attributes...)
-)
+$options = {}
+opts = OptionParser.new do |opts|
+  opts.banner = "Usage: convert.rb [options]"
 
-args = Getopt::Declare.new(args_spec)
+  opts.on("-c COOKBOOK", "--cookbook COOKBOOK", :REQUIRED, String, 
+    "Chef Cookbook directory (e.g. contains /recipes, /attributes...)") do |cookbook|
+      $options[:cookbook] = cookbook
+  end
 
-args.usage && exit if !(args.size == 2)
+  opts.on("-o OUTPUT_DIR", "--output-dir OUTPUT_DIR", :REQUIRED, String, 
+    "Output directory (where modules are written)") do |output_dir|
+      $options[:output_dir] = output_dir
+  end
+
+  opts.on("-s SERVER_NAME", "--server-name SERVER_NAME", :REQUIRED, String, 
+    "The name of the Puppet server to be used in puppet:// URLs") do |server_name|
+      $options[:server_name] = server_name
+  end
+end
+
+opts.parse!(ARGV)
+if $options.keys.size < 3
+  puts opts 
+  exit
+end
 
 # map Chef resources to Puppet
 def resource_translate resource
@@ -29,7 +46,7 @@ def resource_translate resource
        "cookbook_file" => "file",
        "cron" => "cron",
        "deploy" => "deploy",
-       "directory" => "directory",
+       "directory" => "file",
        "erlang_call" => "erlang_call",
        "execute" => "exec",
        "file" => "file",
@@ -52,7 +69,8 @@ def resource_translate resource
        "service" => "service",
        "subversion" => "subversion",
        "template" => "file",
-       "user" => "user"
+       "user" => "user",
+       "include_recipe" => "require"
   }
   return @resource_map[resource.to_s] if @resource_map[resource.to_s]
   resource.to_s
@@ -71,7 +89,8 @@ end
 def default_action resource
   @default_action_map ||= {
         "package" => "install",
-        "gem_package" => "install"
+        "gem_package" => "install",
+        "directory" => "directory"
   }
   return action_translate(@default_action_map[resource.to_s]) if @default_action_map[resource.to_s]
   nil
@@ -80,26 +99,37 @@ end
 class ParsingContext
   attr_accessor :output, 
       :current_chef_resource, 
-      :class_name, 
       :cookbook_name, 
       :recipes_path, 
       :files_path,
       :templates_path,
       :output_path,
       :fname,
-      :short_fname
+      :server_name
 
-  def initialize output, cookbook_name, recipes_path, files_path, templates_path, output_path
+  def initialize output, cookbook_name, recipes_path, files_path, templates_path, output_path, server_name
     @output = output
     @current_chef_resource = current_chef_resource 
-    @class_name = class_name
     @cookbook_name = cookbook_name
     @recipes_path = recipes_path
     @files_path = files_path
     @templates_path = templates_path
     @output_path = output_path
     @fname = ''
-    @short_fname = ''
+    @server_name = server_name
+  end
+
+  def short_fname
+    if fname =~ /default.rb$/
+      # We don't want output files called default.rb
+      @short_fname = "#{@cookbook_name}.rb"
+    else
+      @short_fname = File.basename(@fname)
+    end
+  end
+
+  def class_name
+    @class_name ||= "#{@cookbook_name}::#{short_fname.sub(/\.rb$/, '')}"
   end
 
   def puts *args
@@ -148,16 +178,28 @@ class ChefResource
   def execute arg, &block
     # exec takes the command as the namevar unlike Chef
     @context.current_chef_resource = 'execute'
+
+    # Isolate the command element and reformat it
     block_source = block.to_ruby
     block_source =~ /command\s*(.+)/
     block_source = $1.gsub(/(^[(]*)|([)]*$)/, '')
-    print "  # #{arg.gsub(/[-_]/, ' ')}\n  exec { '"
+    print "  # #{arg.gsub(/[-_]/, ' ')}\n  exec { 'echo \""
+
     # Some strings are interpolated with values from node[][] and this handles that
     # You get this for free from things evaluated inside ChefInnerBlock
     print ChefInnerBlock.new(@context).instance_eval(block_source)
-    puts "':"
+    puts "\" | bash':" # Puppet is unhappy with the exit status of /bin/sh
+    puts "    path => '/bin:/usr/bin:/sbin:/usr/sbin'," # a bit hacky to do this here
 
     handle_inner_block &block
+  end
+
+  def include_recipe name, &block
+    if name =~ /::/
+      puts "  require #{name}\n"
+    else
+      puts "  require '#{name}::#{name}'\n" # The default case for Chef
+    end
   end
 
   def method_missing id, *args, &block
@@ -225,7 +267,7 @@ class ChefInnerBlock
   # Template ----
   def source arg
     if @context.current_chef_resource == 'template'
-      @statements << "content => template('#{arg}')"
+      @statements << "content => template('#{@context.cookbook_name}/#{arg}')"
     elsif [ 'remote_file', 'file' ].include? @context.current_chef_resource
       outfile = arg.split("/").last
       if arg =~ /http/
@@ -233,7 +275,7 @@ class ChefInnerBlock
         outpath = File.join(@context.output_path, 'files', outfile)
         http_get arg, outpath unless File.exist? outpath
       end
-      @statements << "source => 'puppet://server/modules/#{@context.cookbook_name}/#{outfile}"
+      @statements << "source => 'puppet://#{@context.server_name}/modules/#{@context.cookbook_name}/#{outfile}'"
     end
     self
   end
@@ -252,8 +294,8 @@ class ChefInnerBlock
 
   def not_if *args, &block
     block_source = block.to_ruby.sub(/proc \{ /, '').sub(/ \}/, '')
-    block_source.gsub!(/File\.exist\?/, "test -f ").gsub!(/[\(\)]/, '')
-    @statements << "unless => '#{block_source}'" if block_given?
+    block_source.gsub!(/File\.exist\?/, "").gsub!(/[\(\)]/, '')
+    @statements << "creates => #{block_source}" if block_given?
   end
 
   def only_if *args, &block
@@ -336,8 +378,6 @@ end
 def process_recipes context
   Dir[File.join(context.recipes_path, '*')].each do |fname|
     context.fname = fname
-    context.short_fname = fname.sub(/#{context.recipes_path}\//, '')
-    context.class_name = context.short_fname.sub(/\.rb$/, '')
     process_one_recipe context
   end
 end
@@ -397,7 +437,6 @@ end
 def process_templates context
   Dir[File.join(context.templates_path, '*')].each do |fname|
     context.fname = fname
-    context.short_fname = fname.sub(/#{context.templates_path}\//, '')
     process_one_template context
   end
 end
@@ -422,11 +461,11 @@ end
 # MAIN -------------------
 
 # Detect/create configuration info
-cookbook_name  = File.open("#{args['-c']}/metadata.json") { |f| JSON.parse(f.read) }['name']
-recipes_path   = File.join(args['-c'], 'recipes')
-templates_path = File.join(args['-c'], 'templates', 'default') # TODO this only handles default
-files_path     = File.join(args['-c'], 'files', 'default')     # TODO this only handles default
-output_path    = "#{args['-o']}/#{cookbook_name}"
+cookbook_name  = File.open("#{$options[:cookbook]}/metadata.json") { |f| JSON.parse(f.read) }['name']
+recipes_path   = File.join($options[:cookbook], 'recipes')
+templates_path = File.join($options[:cookbook], 'templates', 'default') # TODO this only handles default
+files_path     = File.join($options[:cookbook], 'files', 'default')     # TODO this only handles default
+output_path    = "#{$options[:output_dir]}/#{cookbook_name}"
 
 puts "Cookbook Name:   #{cookbook_name}"
 puts "Recipes Path:    #{recipes_path}"
@@ -440,7 +479,8 @@ context = ParsingContext.new(
   recipes_path,
   files_path,
   templates_path,
-  output_path
+  output_path,
+  $options[:server_name]
 )
 
 # Build the Puppet module output directory structure
