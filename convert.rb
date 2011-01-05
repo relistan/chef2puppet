@@ -186,6 +186,10 @@ class ChefResource
     handle_inner_block &block
   end
 
+  def node *args
+    ChefNode.new
+  end
+
   def gem_package *args, &block
     @context.current_chef_resource = 'gem_package'
     puts "  package { '#{args[0]}':"
@@ -199,6 +203,10 @@ class ChefResource
     else
       puts "  require '#{name}::#{name}'\n" # The default case for Chef
     end
+  end
+
+  def require_recipe name, &block
+    include_recipe name, &block
   end
 
   def method_missing id, *args, &block
@@ -310,10 +318,10 @@ class ChefInnerBlock
   end
 
   def not_if *args, &block
-    block_source = block.to_ruby.sub(/proc \{ /, '').sub(/ \}/, '')
-    block_source.gsub!(/File\.exist\?/, "").gsub!(/[\(\)]/, '')
+    block_source = block.to_ruby.sub(/proc \{\s+/, '').sub(/ \}/, '')
+    block_source = block_source.gsub(/File\.exists?\?/, "").gsub(/[\(\)]/, '')
     if block_given? && (resource_translate(@context.current_chef_resource) != 'file')
-      self['creates'] << block_source if block_given?
+      self['creates'] << block_source 
     end
   end
 
@@ -324,8 +332,12 @@ class ChefInnerBlock
   end
 
   def mode arg
-    # Convert integer to octal again
-    self['mode'] << "0#{arg.to_s(8)}"
+    if arg.is_a? String
+      self['mode'] << arg
+    else
+      # Convert integer to octal again
+      self['mode'] << "0#{arg.to_s(8)}"
+    end
   end
 
   def method_missing id, *args, &block
