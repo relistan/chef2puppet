@@ -326,8 +326,8 @@ class ChefInnerBlock
   end
 
   def only_if *args, &block
-    block_source = block.to_ruby.sub(/proc \{ /, '').sub(/ \}/, '')
-    block_source.gsub!(/File\.exist\?/, "test -f ").gsub!(/[\(\)]/, '')
+    block_source = block.to_ruby.sub(/proc \{\s+/, '').sub(/ \}/, '')
+    block_source = block_source.gsub(/File\.exists?\?/, "test -f ").gsub(/[\(\)]/, ' ')
     self['onlyif'] << block_source if block_given?
   end
 
