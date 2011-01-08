@@ -241,7 +241,7 @@ class ChefInnerBlock
 
   # Exec -------
   def command arg
-     @statements['path'] << '/bin:/usr/bin:/sbin:/usr/sbin'
+     @statements['path'] << "'/bin:/usr/bin:/sbin:/usr/sbin'" if @context.current_chef_resource != 'cron'
      @statements['command'] << %~" echo \\"#{arg.gsub(/"/, '\\\\\"')}\\" | bash"~ # OMG!
     self
   end
@@ -249,7 +249,7 @@ class ChefInnerBlock
 
   # Service ----
   def running *args
-    self['ensure'] << "running"
+    self['ensure'] << "'running'"
     self
   end
   # ------------
@@ -290,6 +290,13 @@ class ChefInnerBlock
   end
   # ------------
 
+  # Directory --
+  def recursive arg
+    self['recurse'] << "#{arg}"
+    self
+  end
+  # ------------
+
   def subscribes *args
     # eat it... we handle this with 'resources'
     self
@@ -313,7 +320,11 @@ class ChefInnerBlock
       self['refreshonly'] << 'true' if @context.current_chef_resource = 'execute'
     end
 
-    arg.reject! { |x| [ :nothing, :create ].include? x }
+    if arg.include? :enable
+      self['enable'] << 'true'
+    end
+
+    arg.reject! { |x| [ :nothing, :create, :run, :enable ].include? x }
     arg.each { |action| self['ensure'] << "'#{action_translate(action)}'" }
   end
 
@@ -369,6 +380,8 @@ class ChefInnerBlock
     if default_action(@context.current_chef_resource) && !self['ensure'].include?("'#{default_action(@context.current_chef_resource)}'")
       self['ensure'] << "'#{default_action(@context.current_chef_resource)}'"
     end
+    self['ensure'].uniq!
+    @statements.delete 'ensure' if self['ensure'].empty?
     @statements
   end
 
