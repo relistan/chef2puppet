@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+
+require 'fileutils'
+
+# Create the directory structure of a Puppet module
+
+output_path = ARGV[0]
+
+if ARGV.empty?
+  puts "Usage: mkmodule <output_path>"
+  exit
+end
+
+puts "Creating directory structure at #{output_path}"
+
+# Build the Puppet module output directory structure
+%w{
+    /files
+    /manifests
+    /lib
+    /lib/puppet
+    /lib/puppet/parser
+    /lib/puppet/provider
+    /lib/puppet/type
+    /lib/facter
+    /templates
+}.each do |dir| 
+  new_dir = File.join(output_path, dir) 
+  puts "Creating... #{ new_dir }"
+  FileUtils.mkdir_p("#{ new_dir }") 
+end
