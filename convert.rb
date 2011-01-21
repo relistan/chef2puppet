@@ -123,14 +123,19 @@ class ParsingContext
   def short_fname
     if fname =~ /default.rb$/
       # We don't want output files called default.rb
-      @short_fname = "#{@cookbook_name}.rb"
+      @short_fname = "init.pp"
     else
       @short_fname = File.basename(@fname)
     end
   end
 
   def class_name
-    @class_name ||= "#{@cookbook_name}::#{short_fname.sub(/\.rb$/, '')}"
+    return @class_name if @class_name
+    if short_fname == "init.pp"
+      @class_name = @cookbook_name
+    else
+      @class_name = "#{@cookbook_name}::#{short_fname.sub(/\.rb$/, '')}"
+    end
   end
 
   def puts *args
@@ -241,8 +246,13 @@ class ChefInnerBlock
 
   # Exec -------
   def command arg
-     @statements['path'] << "'/bin:/usr/bin:/sbin:/usr/sbin'" if @context.current_chef_resource != 'cron'
-     @statements['command'] << %~" echo \\"#{arg.gsub(/"/, '\\\\\"')}\\" | bash"~ # OMG!
+     # We don't set a path... the user should have a default defined for the resource type
+     if arg =~ /[|;]/
+       # If it contains a pipe, we need a real shell to run it in
+       @statements['command'] << %~"bash -c \\"#{arg.gsub(/"/, '\\\\\"')}\\""~
+     else
+       @statements['command'] << %~"#{arg.gsub(/"/, '\\\\"')}"~
+     end
     self
   end
   # ------------
